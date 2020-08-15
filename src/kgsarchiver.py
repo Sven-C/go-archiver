@@ -1,13 +1,23 @@
 #!env/bin/python3
 
 import sys
-import os
 import requests
 import zipfile
 import argparse
 import bs4
+import pathlib
+import tempfile
 
 from timestamp import Timestamp
+
+def isChild(possibleParent, child):
+    for parent in child.parents:
+        try:
+            if parent.samefile(possibleParent):
+                return True
+        except FileNotFoundError as error:
+            pass
+    return False
 
 def downloadZip(url, downloadDirectory, outputDirectory):
     def getZipFilename(url):
@@ -17,25 +27,23 @@ def downloadZip(url, downloadDirectory, outputDirectory):
     if req.status_code != 200:
         return
 
-    tmpFilename = os.path.join(downloadDirectory, getZipFilename(url))
-    with open(tmpFilename, "wb") as f:
-        f.write(req.content)
-    unpackZip(tmpFilename, outputDirectory)
-    os.remove(tmpFilename)
+    # Create path where the zipfile will be written
+    tmpFile = pathlib.Path(downloadDirectory, getZipFilename(url))
+    tmpFile.write_bytes(req.content)
+    unpackZip(tmpFile, outputDirectory)
+    # Remove the zipfile
+    tmpFile.unlink()
 
-def unpackZip(zipFileName, directory):
-    print("Unpacking zipfile", zipFileName, "to", directory)
-    with zipfile.ZipFile(zipFileName) as zf:
+def unpackZip(zipFile, directory):
+    print("Unpacking zipfile", zipFile, "to", directory)
+    with zipfile.ZipFile(zipFile) as zf:
         for fileInfo in zf.infolist():
-            filename = os.path.normpath(os.path.join(directory, fileInfo.filename))
-            if os.path.commonpath((filename, directory)) == directory:
-                print("Extracting file", fileInfo)
-                try:
-                    os.makedirs(os.path.dirname(filename))
-                except FileExistsError:
-                    pass
-                with open(filename, 'wb') as fh:
-                    fh.write(zf.open(fileInfo.filename, "r").read())
+            sgfFile = pathlib.Path(directory, fileInfo.filename).resolve(strict=False)
+            if not isChild(directory, sgfFile):
+                print("SGF file {} would be written outside of {}. Skipping...".format(sgfFile, directory))
+            else:
+                sgfFile.parent.mkdir(parents=True, exist_ok=True)
+                sgfFile.write_bytes(zf.open(fileInfo, "r").read())
 
 def extractBeginAndEndData(name):
     def html():
@@ -76,20 +84,22 @@ def dlGamesTimestamp(name, downloadDirectory, outputDirectory, timestamp):
 
 def dlGames(name, outputDirectory, start, end):
     print("Downloading games of player {} to {}".format(name, outputDirectory))
-    try:
-        os.makedirs(outputDirectory)
-    except FileExistsError as err:
-        pass
-    TMP_DIR = "/tmp/kgsarchiver"
-    if not os.path.isdir(TMP_DIR):
-        os.makedirs(TMP_DIR)
+    outputDirectory.mkdir(parents=True,exist_ok=True)
+
+    # Create temporary directory
+    tmpDir = pathlib.Path(tempfile.mkdtemp())
+
     earliestTimestamp, latestTimestamp = extractBeginAndEndData(name)
 
     start = earliestTimestamp if start < earliestTimestamp else start
     end = end if end < latestTimestamp else latestTimestamp
 
     for timestamp in Timestamp.range(start, end):
-        dlGamesTimestamp(name, TMP_DIR, outputDirectory, timestamp)
+        dlGamesTimestamp(name, tmpDir, outputDirectory, timestamp)
+    
+    # Cleanup the temporary directory
+    tmpDir.rmdir()
+
     
 def parseArgs():
     parser = argparse.ArgumentParser(description="Download game archives from KGS.")
@@ -111,7 +121,7 @@ def main():
     if (start > end):
         print("End date should be after start date.")
         exit(INCORRECT_USAGE)
-    outputDirectory = os.path.abspath(args.output)
+    outputDirectory = pathlib.Path(args.output).resolve()
     dlGames(args.nickname, outputDirectory, start, end)
 
 if __name__ == "__main__":
