@@ -3,6 +3,7 @@ Download game archives from KGS.
 ## Installation
 
 You need to have python3 and pip3 installed.
+Python 3.8.3 works. Lower python 3 versions may work but have not been tested.
 
 Clone the repository.
 
